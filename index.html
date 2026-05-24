@@ -854,7 +854,6 @@ const CardPattern = (function() {
         // ========== 全局信息 ==========
         const isLandlord = (gameState.landlord === aiIdx);
         const landlordIdx = gameState.landlord;
-        const playerCardCount = gameState.playerCards.length;
         const othersCount = [];
         for (let i = 1; i <= gameState.opponents.length; i++) {
             othersCount.push(gameState.opponents[i - 1].cards.length);
@@ -871,20 +870,17 @@ const CardPattern = (function() {
         if (gameState.lastPlayedCards.length === 0) {
             // 1. 如果能一手出完，直接出
             if (aiCards.length <= 5) {
-                // 简单判断：全部出完
                 selected = [...aiCards];
             }
             
-            // 2. 优先出飞机（不带翅膀或带翅膀）
+            // 2. 优先出飞机（不能有2和王）
             if (selected.length === 0) {
-                // 找出所有三张及以上
                 const valueCount = new Map();
                 ascCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
                 const tripleValues = [];
                 for (let [v, cnt] of valueCount) {
-                    if (cnt >= 3) tripleValues.push(v);
+                    if (cnt >= 3 && v < 15) tripleValues.push(v);
                 }
-                // 找连续的三张（飞机）
                 tripleValues.sort((a,b)=>a-b);
                 let maxPlaneLen = 0;
                 let planeStart = -1;
@@ -909,13 +905,12 @@ const CardPattern = (function() {
                 }
             }
             
-            // 3. 优先出连对（如 334455）
+            // 3. 优先出连对（不能有2和王）
             if (selected.length === 0) {
-                // 找出所有对子
                 const pairValues = [];
                 const used = new Set();
                 for (let i = 0; i < ascCards.length - 1; i++) {
-                    if (!used.has(i) && ascCards[i].value === ascCards[i+1].value) {
+                    if (!used.has(i) && ascCards[i].value === ascCards[i+1].value && ascCards[i].value < 15) {
                         pairValues.push(ascCards[i].value);
                         used.add(i);
                         used.add(i+1);
@@ -945,16 +940,15 @@ const CardPattern = (function() {
                 }
             }
             
-            // 4. 出顺子（至少5张）
+            // 4. 出顺子（至少5张，不能有2和王）
             if (selected.length === 0) {
-                // 找出最长顺子
-                let straight = [];
                 let temp = [];
                 for (let i = 0; i < ascCards.length; i++) {
-                    if (ascCards[i].value >= 15) continue; // 不能有2和王
-                    if (temp.length === 0 || ascCards[i].value === temp[temp.length-1].value + 1) {
+                    const val = ascCards[i].value;
+                    if (val >= 15) continue;
+                    if (temp.length === 0 || val === temp[temp.length-1].value + 1) {
                         temp.push(ascCards[i]);
-                    } else if (ascCards[i].value > temp[temp.length-1].value + 1) {
+                    } else if (val > temp[temp.length-1].value + 1) {
                         if (temp.length >= 5) break;
                         temp = [ascCards[i]];
                     }
@@ -968,7 +962,6 @@ const CardPattern = (function() {
             if (selected.length === 0) {
                 for (let i = 0; i < ascCards.length - 2; i++) {
                     if (ascCards[i].value === ascCards[i+1].value && ascCards[i+1].value === ascCards[i+2].value) {
-                        // 找最小的单张作为带牌
                         let kicker = null;
                         for (let j = 0; j < ascCards.length; j++) {
                             if (ascCards[j].value !== ascCards[i].value) {
@@ -996,7 +989,7 @@ const CardPattern = (function() {
                 }
             }
             
-            // 7. 最后出最小的单张（尽量不出王）
+            // 7. 最后出最小的单张
             if (selected.length === 0) {
                 let minNormal = ascCards.find(c => c.value <= 15);
                 if (minNormal) selected = [minNormal];
@@ -1006,8 +999,37 @@ const CardPattern = (function() {
         
         // ========== 被动出牌（有人出牌） ==========
         else {
-            const lastType = getCardType(gameState.lastPlayedCards);
             const lastCards = gameState.lastPlayedCards;
+            const lastTypeInfo = lastCards.length ? CardPattern.getType(lastCards) : null;
+            const lastType = lastTypeInfo ? lastTypeInfo.type : null;
+            
+            // 情况1：有人出炸弹/王炸，优先压炸弹
+            if (lastCards.length > 0 && (lastType === 'bomb' || lastType === 'rocket')) {
+                const jokerB = aiCards.find(c => c.value === 16);
+                const jokerR = aiCards.find(c => c.value === 17);
+                if (jokerB && jokerR) {
+                    selected = [jokerB, jokerR];
+                } else if (lastType === 'bomb') {
+                    const valueCount = new Map();
+                    aiCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
+                    let minBiggerBomb = Infinity;
+                    for (let [v, cnt] of valueCount) {
+                        if (cnt >= 4 && v > lastTypeInfo.mainValue && v < minBiggerBomb) {
+                            minBiggerBomb = v;
+                        }
+                    }
+                    if (minBiggerBomb !== Infinity) {
+                        selected = aiCards.filter(c => c.value === minBiggerBomb).slice(0, 4);
+                    }
+                }
+                if (selected.length > 0) {
+                    performPlay(aiIdx, selected);
+                    return;
+                } else {
+                    performPass();
+                    return;
+                }
+            }
             
             // 获取上家出牌的关键值
             let lastKeyValue = 0;
@@ -1025,29 +1047,24 @@ const CardPattern = (function() {
                 lastKeyValue = Math.max(...lastCards.map(c => c.value));
             }
             
-            // 农民策略：如果是地主出的牌，要尽量压（但不能浪费大牌）
             const isFromLandlord = (gameState.lastPlayedByIdx === landlordIdx);
             
-            // 找能压的牌（尽量用最小的）
             if (lastType === 'single') {
                 let candidates = ascCards.filter(c => c.value > lastKeyValue);
-                // 农民压地主时，可以用稍大的牌但不浪费王
                 if (isFromLandlord && !isLandlord) {
                     candidates = candidates.filter(c => c.value <= 15);
                 }
                 if (candidates.length > 0) {
                     selected = [candidates[0]];
                 }
-            } 
-            else if (lastType === 'pair') {
+            } else if (lastType === 'pair') {
                 for (let i = 0; i < ascCards.length - 1; i++) {
                     if (ascCards[i].value === ascCards[i+1].value && ascCards[i].value > lastKeyValue) {
                         selected = [ascCards[i], ascCards[i+1]];
                         break;
                     }
                 }
-            }
-            else if (lastType === 'triplet') {
+            } else if (lastType === 'triplet') {
                 for (let i = 0; i < ascCards.length - 2; i++) {
                     if (ascCards[i].value === ascCards[i+1].value && 
                         ascCards[i+1].value === ascCards[i+2].value &&
@@ -1058,7 +1075,6 @@ const CardPattern = (function() {
                 }
             }
             
-            // 炸弹逻辑：只有特殊情况才出
             const shouldBomb = (lastType === 'bomb') || 
                                (isLandlord && aiCards.length <= 3) ||
                                (someoneHasOne && !isLandlord);
@@ -1087,7 +1103,6 @@ const CardPattern = (function() {
             performPlay(gameState.currentTurnIdx, selected);
         }
     }
-
     function initGame() {
         if (gameState.aiTimer) clearTimeout(gameState.aiTimer);
         
