@@ -795,7 +795,7 @@ const CardPattern = (function() {
         
         if(gameState.currentTurnIdx !== 0 && !gameState.gameOver && gameState.phase === 'playing') {
             if (gameState.aiTimer) clearTimeout(gameState.aiTimer);
-            gameState.aiTimer = setTimeout(() => aiTurn(), 3000);
+            gameState.aiTimer = setTimeout(() => aiTurn(), 2000);
         }
         return true;
     }
@@ -818,7 +818,7 @@ const CardPattern = (function() {
         
         if (gameState.currentTurnIdx !== 0 && !gameState.gameOver && gameState.phase === 'playing') {
             if (gameState.aiTimer) clearTimeout(gameState.aiTimer);
-            gameState.aiTimer = setTimeout(() => aiTurn(), 3000);
+            gameState.aiTimer = setTimeout(() => aiTurn(), 2000);
         }
     }
 
