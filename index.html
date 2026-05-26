@@ -670,7 +670,7 @@ const CardPattern = (function() {
 
         // 底牌
         extraPileDiv.innerHTML = '';
-        if(gameState.extraCards.length) {
+                if (gameState.landlord !== null && gameState.extraCards.length) {
             const label = document.createTextNode('底牌: ');
             extraPileDiv.appendChild(label);
             gameState.extraCards.forEach(c => {
@@ -759,6 +759,16 @@ const CardPattern = (function() {
 
     function performPlay(playerIdx, cards) {
         if(!cards.length) return false;
+        
+        // 玩家出牌时，必须校验牌型合法性
+        if (playerIdx === 0) {
+            const cardType = getCardType(cards);
+            if (!cardType) {
+                gameStatusSpan.innerText = '牌型不合法！不能出这些牌。';
+                return false;
+            }
+        }
+        
         if(!canBeat(cards, gameState.lastPlayedCards)) return false;
         
         const playerName = (playerIdx === 0) ? '【你】' : `【AI${playerIdx}】`;
@@ -940,45 +950,54 @@ const CardPattern = (function() {
                 }
             }
             
-            // 4. 出顺子（至少5张，不能有2和王）
+            // 4. 出顺子（至少5张，必须连续，不能有2和王）
             if (selected.length === 0) {
-                let temp = [];
-                for (let i = 0; i < ascCards.length; i++) {
-                    const val = ascCards[i].value;
-                    if (val >= 15) continue;
-                    if (temp.length === 0 || val === temp[temp.length-1].value + 1) {
-                        temp.push(ascCards[i]);
-                    } else if (val > temp[temp.length-1].value + 1) {
-                        if (temp.length >= 5) break;
-                        temp = [ascCards[i]];
+                // 找出所有可能的顺子
+                let bestStraight = [];
+                // 从最小开始尝试找顺子
+                for (let start = 0; start < ascCards.length; start++) {
+                    if (ascCards[start].value >= 15) continue;
+                    let temp = [ascCards[start]];
+                    for (let i = start + 1; i < ascCards.length; i++) {
+                        const val = ascCards[i].value;
+                        if (val >= 15) break;
+                        if (val === temp[temp.length - 1].value + 1) {
+                            temp.push(ascCards[i]);
+                        } else if (val > temp[temp.length - 1].value + 1) {
+                            break;
+                        }
+                    }
+                    if (temp.length >= 5 && temp.length > bestStraight.length) {
+                        bestStraight = [...temp];
                     }
                 }
-                if (temp.length >= 5) {
-                    selected = [...temp];
+                if (bestStraight.length >= 5) {
+                    selected = bestStraight;
                 }
             }
             
-            // 5. 出三带一
+            // 5. 出三带一（优先出最小的）
             if (selected.length === 0) {
+                let bestTriplet = null;
+                let bestKicker = null;
                 for (let i = 0; i < ascCards.length - 2; i++) {
                     if (ascCards[i].value === ascCards[i+1].value && ascCards[i+1].value === ascCards[i+2].value) {
-                        let kicker = null;
                         for (let j = 0; j < ascCards.length; j++) {
                             if (ascCards[j].value !== ascCards[i].value) {
-                                kicker = ascCards[j];
+                                if (!bestTriplet || ascCards[i].value < bestTriplet) {
+                                    bestTriplet = ascCards[i].value;
+                                    bestKicker = ascCards[j];
+                                }
                                 break;
                             }
                         }
-                        if (kicker) {
-                            selected = [ascCards[i], ascCards[i+1], ascCards[i+2], kicker];
-                        } else {
-                            selected = [ascCards[i], ascCards[i+1], ascCards[i+2]];
-                        }
-                        break;
                     }
                 }
+                if (bestTriplet) {
+                    const tripleCards = ascCards.filter(c => c.value === bestTriplet).slice(0, 3);
+                    selected = [...tripleCards, bestKicker];
+                }
             }
-            
             // 6. 出对子（最小的）
             if (selected.length === 0) {
                 for (let i = 0; i < ascCards.length - 1; i++) {
@@ -1073,8 +1092,168 @@ const CardPattern = (function() {
                         break;
                     }
                 }
+            } else if (lastType === 'three_with_one') {
+                // 三带一：需要找更大的三张 + 一张单牌
+                const valueCount = new Map();
+                ascCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
+                const validTriplets = [];
+                for (let [v, cnt] of valueCount) {
+                    if (cnt >= 3 && v > lastKeyValue && v < 15) {
+                        validTriplets.push(v);
+                    }
+                }
+                validTriplets.sort((a,b) => a - b);
+                for (let tripVal of validTriplets) {
+                    const tripleCards = ascCards.filter(c => c.value === tripVal).slice(0, 3);
+                    let kicker = null;
+                    for (let i = 0; i < ascCards.length; i++) {
+                        if (ascCards[i].value !== tripVal && !tripleCards.includes(ascCards[i])) {
+                            kicker = ascCards[i];
+                            break;
+                        }
+                    }
+                    if (kicker) {
+                        selected = [...tripleCards, kicker];
+                        break;
+                    }
+                }
+            } else if (lastType === 'three_with_pair') {
+                // 三带一对：需要找更大的三张 + 一对
+                const valueCount = new Map();
+                ascCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
+                const validTriplets = [];
+                for (let [v, cnt] of valueCount) {
+                    if (cnt >= 3 && v > lastKeyValue && v < 15) {
+                        validTriplets.push(v);
+                    }
+                }
+                validTriplets.sort((a,b) => a - b);
+                for (let tripVal of validTriplets) {
+                    const tripleCards = ascCards.filter(c => c.value === tripVal).slice(0, 3);
+                    let pairCards = null;
+                    for (let i = 0; i < ascCards.length - 1; i++) {
+                        if (ascCards[i].value === ascCards[i+1].value && 
+                            ascCards[i].value !== tripVal &&
+                            !tripleCards.includes(ascCards[i])) {
+                            pairCards = [ascCards[i], ascCards[i+1]];
+                            break;
+                        }
+                    }
+                    if (pairCards) {
+                        selected = [...tripleCards, ...pairCards];
+                        break;
+                    }
+                }
+            } else if (lastType === 'straight') {
+                const lastLen = lastTypeInfo.length;
+                const lastMax = lastKeyValue;
+                let bestStraight = [];
+                for (let start = 0; start < ascCards.length; start++) {
+                    if (ascCards[start].value >= 15) continue;
+                    let temp = [ascCards[start]];
+                    for (let i = start + 1; i < ascCards.length; i++) {
+                        const val = ascCards[i].value;
+                        if (val >= 15) break;
+                        if (val === temp[temp.length - 1].value + 1) {
+                            temp.push(ascCards[i]);
+                        } else if (val > temp[temp.length - 1].value + 1) {
+                            break;
+                        }
+                    }
+                    if (temp.length === lastLen && temp[temp.length-1].value > lastMax) {
+                        bestStraight = [...temp];
+                        break;
+                    }
+                }
+                if (bestStraight.length === lastLen) {
+                    selected = bestStraight;
+                }
+            } else if (lastType === 'pair_straight') {
+                const lastLen = lastTypeInfo.length;
+                const lastMax = lastKeyValue;
+                for (let start = 0; start < ascCards.length - 1; start++) {
+                    if (ascCards[start].value >= 15) continue;
+                    let temp = [];
+                    for (let i = start; i < ascCards.length - 1; i += 2) {
+                        if (ascCards[i].value === ascCards[i+1].value) {
+                            temp.push(ascCards[i]);
+                        } else {
+                            break;
+                        }
+                        if (temp.length === lastLen && temp[temp.length-1].value > lastMax) {
+                            selected = [];
+                            for (let c of temp) {
+                                selected.push(c, c);
+                            }
+                            break;
+                        }
+                        if (i+2 < ascCards.length && ascCards[i+2].value !== ascCards[i].value + 1) break;
+                    }
+                    if (selected.length > 0) break;
+                }
+            } else if (lastType === 'plane') {
+                const lastLen = lastTypeInfo.length;
+                const lastMax = lastKeyValue;
+                const valueCount = new Map();
+                ascCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
+                const tripleValues = [];
+                for (let [v, cnt] of valueCount) {
+                    if (cnt >= 3 && v < 15) tripleValues.push(v);
+                }
+                tripleValues.sort((a,b)=>a-b);
+                for (let i = 0; i <= tripleValues.length - lastLen; i++) {
+                    let isConsecutive = true;
+                    for (let j = 0; j < lastLen - 1; j++) {
+                        if (tripleValues[i+j+1] - tripleValues[i+j] !== 1) {
+                            isConsecutive = false;
+                            break;
+                        }
+                    }
+                    if (isConsecutive && tripleValues[i+lastLen-1] > lastMax) {
+                        selected = [];
+                        for (let k = 0; k < lastLen; k++) {
+                            const v = tripleValues[i+k];
+                            const cardsOfVal = ascCards.filter(c => c.value === v);
+                            for (let m = 0; m < 3; m++) selected.push(cardsOfVal[m]);
+                        }
+                        break;
+                    }
+                }
+            } else if (lastType === 'plane_with_wings') {
+                const lastLen = lastTypeInfo.length;
+                const lastMax = lastKeyValue;
+                const valueCount = new Map();
+                ascCards.forEach(c => valueCount.set(c.value, (valueCount.get(c.value) || 0) + 1));
+                const tripleValues = [];
+                for (let [v, cnt] of valueCount) {
+                    if (cnt >= 3 && v < 15) tripleValues.push(v);
+                }
+                tripleValues.sort((a,b)=>a-b);
+                for (let i = 0; i <= tripleValues.length - lastLen; i++) {
+                    let isConsecutive = true;
+                    for (let j = 0; j < lastLen - 1; j++) {
+                        if (tripleValues[i+j+1] - tripleValues[i+j] !== 1) {
+                            isConsecutive = false;
+                            break;
+                        }
+                    }
+                    if (isConsecutive && tripleValues[i+lastLen-1] > lastMax) {
+                        const planePart = [];
+                        for (let k = 0; k < lastLen; k++) {
+                            const v = tripleValues[i+k];
+                            const cardsOfVal = ascCards.filter(c => c.value === v);
+                            for (let m = 0; m < 3; m++) planePart.push(cardsOfVal[m]);
+                        }
+                        const remaining = ascCards.filter(c => !planePart.includes(c));
+                        const wingCount = lastLen;
+                        if (remaining.length >= wingCount) {
+                            selected = [...planePart];
+                            for (let w = 0; w < wingCount; w++) selected.push(remaining[w]);
+                        }
+                        break;
+                    }
+                }
             }
-            
             const shouldBomb = (lastType === 'bomb') || 
                                (isLandlord && aiCards.length <= 3) ||
                                (someoneHasOne && !isLandlord);
